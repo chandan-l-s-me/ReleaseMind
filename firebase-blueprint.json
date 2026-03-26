@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user-specific settings and profile information.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "displayName": { "type": "string", "description": "User's display name" },
+        "email": { "type": "string", "format": "email", "description": "User's email address" },
+        "photoURL": { "type": "string", "description": "URL to user's profile picture" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the account was created" }
+      },
+      "required": ["uid", "createdAt"]
+    },
+    "Analysis": {
+      "title": "Release Analysis",
+      "description": "Stores history of code analyses performed by the user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "UID of the user who performed the analysis" },
+        "repoUrl": { "type": "string", "description": "URL of the repository analyzed" },
+        "diff": { "type": "string", "description": "The code diff analyzed" },
+        "result": { "type": "object", "description": "The full analysis result object" },
+        "timestamp": { "type": "string", "format": "date-time", "description": "When the analysis was performed" }
+      },
+      "required": ["userId", "repoUrl", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "/analyses/{analysisId}": {
+      "schema": "Analysis",
+      "description": "Analysis history records"
+    }
+  }
+}

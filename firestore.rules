@@ -1,0 +1,117 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: userId (Auth UID)
+    // Fields:
+    //   - uid: string (required) - Firebase Auth UID
+    //   - displayName: string (optional) - User's display name
+    //   - email: string (optional, format: email) - User's email address
+    //   - photoURL: string (optional) - URL to user's profile picture
+    //   - createdAt: string (required, format: date-time) - When the account was created
+    //
+    // Collection: analyses
+    // Document ID: auto-generated
+    // Fields:
+    //   - userId: string (required) - UID of the user who performed the analysis
+    //   - repoUrl: string (required) - URL of the repository analyzed
+    //   - diff: string (optional) - The code diff analyzed
+    //   - result: map (optional) - The full analysis result object
+    //   - timestamp: string (required, format: date-time) - When the analysis was performed
+    //   - riskScore: number (optional) - The risk score calculated
+    //
+    // Collection: userConfigs
+    // Document ID: userId (Auth UID)
+    // Fields:
+    //   - customAgents: list (optional) - List of custom agent strings
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function hasOnlyAllowedFields(allowedFields) {
+      return request.resource.data.keys().hasOnly(allowedFields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'displayName', 'email', 'photoURL', 'createdAt']) &&
+             data.uid == request.auth.uid &&
+             data.createdAt is string && isValidDateString(data.createdAt) &&
+             (!('email' in data) || isValidEmail(data.email)) &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() < 500));
+    }
+
+    function isValidAnalysis(data) {
+      return hasOnlyAllowedFields(['userId', 'repoUrl', 'diff', 'result', 'timestamp', 'riskScore']) &&
+             data.userId == request.auth.uid &&
+             data.repoUrl is string && data.repoUrl.size() < 500 &&
+             data.timestamp is string && isValidDateString(data.timestamp) &&
+             (!('diff' in data) || (data.diff is string && data.diff.size() < 50000)) &&
+             (!('result' in data) || (data.result is map)) &&
+             (!('riskScore' in data) || (data.riskScore is number));
+    }
+
+    function isValidUserConfig(data) {
+      return hasOnlyAllowedFields(['customAgents']) &&
+             (!('customAgents' in data) || (data.customAgents is list));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && 
+                      request.resource.data.uid == resource.data.uid &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false; // Profiles shouldn't be deleted easily
+    }
+
+    match /analyses/{analysisId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidAnalysis(request.resource.data);
+      allow update: if false; // Analyses are immutable history
+      allow delete: if isDocOwner();
+    }
+
+    match /userConfigs/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId) && isValidUserConfig(request.resource.data);
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
