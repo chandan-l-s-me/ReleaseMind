@@ -26,6 +26,14 @@ export interface AnalysisResult {
   riskAssessment: string;
   suggestedTests: string[];
   confidenceScore: number;
+  baseAgentFindings?: Array<{
+    agent: string;
+    finding: string;
+  }>;
+  customAgentFindings?: Array<{
+    agent: string;
+    finding: string;
+  }>;
 }
 
 export interface UserConfig {

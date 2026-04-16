@@ -16,6 +16,7 @@ type GitHubTarget =
 
 const REPO_FILE_CHAR_LIMIT = 180000;
 const MAX_SINGLE_FILE_SIZE = 100000;
+const MAX_REPO_FILES_TO_READ = 25;
 const TEXT_FILE_EXTENSIONS = new Set([
   ".ts",
   ".tsx",
@@ -121,13 +122,42 @@ function getGitHubHeaders(accept = "application/vnd.github+json") {
   return headers;
 }
 
+async function buildGitHubError(response: Response) {
+  const remaining = response.headers.get("x-ratelimit-remaining");
+  const resetAt = response.headers.get("x-ratelimit-reset");
+  const bodyText = await response.text().catch(() => "");
+
+  if (
+    response.status === 403 &&
+    (remaining === "0" || bodyText.toLowerCase().includes("rate limit"))
+  ) {
+    const resetSuffix = resetAt
+      ? ` GitHub rate limits should reset around ${new Date(Number(resetAt) * 1000).toLocaleTimeString()}.`
+      : "";
+    return new Error(
+      `GitHub API rate limit reached. Add GITHUB_TOKEN to the server environment for higher limits.${resetSuffix}`
+    );
+  }
+
+  if (response.status === 404) {
+    return new Error("GitHub resource was not found. Double-check the repository or pull request URL.");
+  }
+
+  if (response.status === 401) {
+    return new Error("GitHub rejected the server credentials. Check the configured GITHUB_TOKEN.");
+  }
+
+  const bodyMessage = bodyText ? ` ${bodyText.slice(0, 200)}` : "";
+  return new Error(`GitHub API request failed with status ${response.status}.${bodyMessage}`);
+}
+
 async function fetchGitHubJson<T>(url: string): Promise<T> {
   const response = await fetch(url, {
     headers: getGitHubHeaders()
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub API request failed with status ${response.status}`);
+    throw await buildGitHubError(response);
   }
 
   return response.json() as Promise<T>;
@@ -143,7 +173,7 @@ async function fetchGitHubText(url: string, accept: string): Promise<string> {
   }
 
   if (!response.ok) {
-    throw new Error(`GitHub content request failed with status ${response.status}`);
+    throw await buildGitHubError(response);
   }
 
   return response.text();
@@ -214,7 +244,8 @@ async function buildRepoFileContext(owner: string, repo: string, ref: string) {
   const candidateFiles = tree
     .filter((item: any) => item.type === "blob" && typeof item.path === "string" && isLikelyTextFile(item.path))
     .filter((item: any) => typeof item.size === "number" ? item.size <= MAX_SINGLE_FILE_SIZE : true)
-    .sort((a: any, b: any) => scoreFilePath(b.path) - scoreFilePath(a.path) || a.path.localeCompare(b.path));
+    .sort((a: any, b: any) => scoreFilePath(b.path) - scoreFilePath(a.path) || a.path.localeCompare(b.path))
+    .slice(0, MAX_REPO_FILES_TO_READ);
 
   let totalChars = 0;
   let truncated = false;
@@ -420,7 +451,9 @@ async function startServer() {
     } catch (error) {
       console.error("GitHub context fetch failed:", error);
       return res.status(502).json({
-        error: "Unable to fetch data from GitHub. Make sure the repository or pull request is public and reachable."
+        error: error instanceof Error
+          ? error.message
+          : "Unable to fetch data from GitHub. Make sure the repository or pull request is public and reachable."
       });
     }
   });

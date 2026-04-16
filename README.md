@@ -1,279 +1,282 @@
+# ReleaseMind
 
-## ReleaseMind
+ReleaseMind is an AI-assisted release intelligence dashboard for engineering teams. It analyzes a public GitHub repository or pull request, combines that live GitHub context with your notes, and produces a release report with risk scoring, dependency impact, prioritized tests, and agent-based findings.
 
-### AI-Powered Multi-Agent Release Intelligence for Modern CI/CD
+This project is built as a React + Vite frontend with an Express + Socket.IO backend and a Gemini-powered analysis layer, with local fallback analysis when Gemini is unavailable.
 
-ReleaseMind is an **intelligent orchestration layer for software delivery pipelines** that predicts release risks, optimizes testing strategies, and provides explainable deployment recommendations using a multi-agent AI architecture.
+## What It Does
 
-Modern DevOps pipelines automate execution —
-ReleaseMind introduces **intelligence into execution**.
+ReleaseMind helps answer questions like:
 
----
+- What parts of the system are impacted by this change?
+- How risky is this release?
+- Which tests should be run first?
+- Should the team do a full release, a canary release, or block the rollout?
+- What do the core agents think about the release from different perspectives?
 
-##  Problem Statement
+The app is designed around a multi-agent release workflow:
 
-Today’s CI/CD systems face critical inefficiencies:
+- `Code Context Agent`
+- `Dependency Graph Agent`
+- `Risk Prediction Agent`
+- `Test Prioritization Agent`
+- `Release Decision Agent`
 
-* No predictive insight into release failure risk
-* Pipelines execute redundant test suites blindly
-* Production incidents due to insufficient impact analysis
-* Complex dependency propagation is not understood
-* Engineers rely on intuition rather than data-driven release decisions
+It also supports user-defined custom agents whose findings are displayed in the dashboard.
 
-This results in:
+## Current Features
 
-* Slower delivery velocity
-* Increased infrastructure cost
-* Reduced deployment confidence
-* Poor incident preparedness
+- Public GitHub repository URL support
+- Public GitHub pull request URL support
+- Repository file ingestion from GitHub
+- PR patch and changed-file context fetching
+- Gemini-based structured release analysis
+- Local fallback analysis when Gemini is unavailable
+- Risk score with live recommendation updates
+- Prioritized test simulation with interactive score reduction
+- Dependency impact graph visualization
+- Core agent findings display
+- Custom agent findings display
+- Google and email authentication via Firebase
+- Real-time collaborative room state with Socket.IO
+- Analysis history saved to Firestore for signed-in users
 
----
+## How Analysis Works
 
-##  Solution Overview
+### 1. Input
 
-ReleaseMind acts as an **AI decision engine on top of CI pipelines**.
+The user can provide:
 
-Instead of static automation, it introduces:
+- a public GitHub repository URL
+- a public GitHub PR URL
+- additional change notes or manual context
 
-### Multi-Agent AI Release Intelligence
+### 2. GitHub Context Fetching
 
-It analyzes:
+The backend parses the GitHub URL and fetches live data from the GitHub API.
 
-* Repository changes (diff-based reasoning)
-* Architectural impact propagation
-* Security & stability risk
-* Test prioritization strategy
-* Deployment rollout recommendations
+For a public repository URL, ReleaseMind fetches:
 
-ReleaseMind transforms CI/CD from:
+- repository metadata
+- recent commits
+- README content
+- a prioritized set of readable source/config/docs files
 
-> **Automation → Autonomous Decision Intelligence**
+For a public PR URL, ReleaseMind fetches:
 
----
+- PR metadata
+- changed files
+- patch excerpts
+- repository files from the PR head/default branch
 
-##  Solution Workflow 
+This happens in [server.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/server.ts:1).
 
-###  Release Context Input
+### 3. AI / Fallback Analysis
 
-User provides:
+The aggregated GitHub context is passed into [src/services/geminiService.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/src/services/geminiService.ts:1).
 
-* Repository URL
-* Code diff / change context
+If a Gemini API key is available, the app requests structured output including:
 
-This simulates real GitHub PR integration.
+- impacted modules
+- detailed risk assessment
+- prioritized tests
+- graph nodes and links
+- core agent findings
+- custom agent findings
 
----
+If Gemini is unavailable or fails, ReleaseMind falls back to a local heuristic analysis so the dashboard still works.
 
-###  Multi-Agent AI Analysis Engine
+### 4. Dashboard Output
 
-Implemented in:
+The dashboard presents:
 
-```
-src/services/geminiService.ts
-```
+- risk score
+- release recommendation
+- dependency impact graph
+- prioritized tests
+- what-if simulation
+- core agent findings
+- custom agent findings
 
-ReleaseMind dynamically orchestrates agents:
+## Recommendation Logic
 
-####  Architect Agent
+Recommendations are based on risk score thresholds:
 
-* Detects impacted modules
-* Builds dependency propagation graph
-
-#### Security Agent
-
-* Identifies risk patterns
-* Evaluates vulnerability exposure
-
-#### QA Agent
-
-* Selects **minimal effective test set**
-* Prioritizes tests by impact score
-
-Custom agents can also be injected dynamically.
-
----
-
-###  Risk Intelligence Engine
-
-AI produces:
-
-* Risk score (0–100)
-* Stability reasoning
-* Confidence estimation
-* Suggested release strategy:
-
-| Risk Score | Strategy       |
+| Risk Score | Recommendation |
 | ---------- | -------------- |
-| 0–40       | Full Release   |
-| 41–70      | Canary Release |
-| 71–100     | Block Release  |
+| 0-40       | Full Release   |
+| 41-70      | Canary Release |
+| 71-100     | Block Release  |
 
-This is implemented programmatically after AI output.
+The dashboard recommendation updates from the current displayed risk score, including the what-if test simulation.
 
----
+## Core Agents
 
-###  Dependency Graph Construction
+The shared base-agent definition lives in [src/lib/agents.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/src/lib/agents.ts:1).
 
-AI generates:
+### Code Context Agent
 
-* Impacted nodes
-* Dependency propagation links
+Analyzes semantic code changes and identifies the most affected modules.
 
-Frontend visualizes this using:
+### Dependency Graph Agent
 
-```
-GraphView.tsx
-```
+Maps dependency propagation and blast radius across connected services.
 
-This helps teams **understand blast radius before deployment**.
+### Risk Prediction Agent
 
----
+Assesses security, stability, and performance risk for the release.
 
-### Test Optimization Engine
+### Test Prioritization Agent
 
-System converts AI output into:
+Selects the highest-impact tests to run before release.
 
-```
-prioritizedTests
-```
+### Release Decision Agent
 
-Sorted by impact → reducing CI runtime.
+Recommends full release, canary release, or blocking the rollout.
 
-This is **real CI efficiency intelligence**, not simulation.
+## Custom Agents
 
----
+Users can add custom agent personas from the dashboard settings modal.
 
-### Real-Time Collaborative Release Simulation
+Custom agents:
 
-Backend:
+- are saved in Firestore user config
+- are injected into the Gemini prompt
+- return visible findings in the `Custom Agent Findings` section
 
-```
-server.ts (Socket.IO + Express)
-```
+If fallback mode is active, the dashboard still shows a note for each custom agent explaining that no model-generated finding was produced.
 
-Supports:
+## GitHub Support
 
-* Multi-user shared release rooms
-* Real-time state synchronization
-* Collaborative risk analysis
+ReleaseMind currently supports:
 
-This simulates real DevOps war-room scenarios.
+- public repositories
+- public pull requests
 
----
+It does not currently support:
 
-### Predictive Deployment Recommendation
+- private repository analysis via OAuth/App installation
+- full repository cloning
+- unlimited file ingestion for very large repos
 
-Final output includes:
+To keep analysis practical, the backend reads a capped number of prioritized text files and truncates large contexts before sending them to the model.
 
-* Release recommendation
-* Risk reasoning
-* Test execution strategy
-* Dependency visualization
+## Rate Limiting
 
----
+Public GitHub repositories can still hit GitHub API rate limits if the server is calling the API without authentication.
 
-##  System Architecture
+To improve GitHub API reliability, add a `GITHUB_TOKEN` in your environment:
 
-```
-Developer Commit / PR
-        ↓
-ReleaseMind AI Layer
-        ↓
-Multi-Agent Analysis
-        ↓
-Risk + Graph + Test Optimization
-        ↓
-Deployment Recommendation
-        ↓
-CI Pipeline Execution
+```env
+GITHUB_TOKEN=your_github_personal_access_token
 ```
 
----
+The server now returns clearer GitHub errors for:
 
-##  Real Problem-Solving Impact
+- rate limiting
+- missing resources
+- invalid credentials
 
-###  Faster Delivery Cycles
+## Authentication
 
-Selective testing reduces pipeline time significantly.
+Authentication is handled with Firebase.
 
-###  Prevent Production Incidents
+Current supported sign-in methods in the app:
 
-Risk prediction prevents unstable releases.
+- Google
+- Email / Password
 
-###  Cloud Cost Optimization
+GitHub login has been removed from the auth flow.
 
-Avoids running unnecessary test suites.
-
-###  Intelligent Engineering Decisions
-
-Engineers gain explainable deployment insights.
-
-###  Collaborative Release Intelligence
-
-Real-time rooms simulate enterprise release coordination.
-
-###  AI-Native DevOps Future
-
-Moves DevOps toward autonomous release engineering.
-
----
-
-## Tech Stack 
+## Tech Stack
 
 Frontend:
 
-* React + Vite
-* TypeScript
-* Graph visualization
-* Real-time dashboards
+- React 19
+- Vite
+- TypeScript
+- Motion
+- Recharts
+- D3
+- Tailwind
 
 Backend:
 
-* Node.js + Express
-* Socket.IO collaboration layer
+- Node.js
+- Express
+- Socket.IO
 
-AI Layer:
+AI:
 
-* Gemini AI (structured JSON reasoning)
-* Multi-agent orchestration design
+- Google Gemini via `@google/genai`
 
-Infra:
+Auth / Data:
 
-* Firebase configs
-* Environment-driven deployment
+- Firebase Authentication
+- Firestore
 
----
+## Local Setup
 
-##  Innovation Highlights
+### 1. Install dependencies
 
-✔ Multi-Agent AI for CI/CD (rare concept)
-✔ AI-generated dependency graph reasoning
-✔ Predictive release strategy engine
-✔ Real-time collaborative release simulation
-✔ Explainable DevOps intelligence
-✔ Dynamic agent extensibility
+```bash
+npm install
+```
 
-This is **not just an AI wrapper → it is an AI DevOps system design.**
+### 2. Create `.env`
 
----
+Create [ReleaseMind/.env](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/.env:1) with the keys you need:
 
+```env
+GEMINI_API_KEY=your_gemini_api_key
+VITE_GEMINI_API_KEY=your_gemini_api_key
+GITHUB_TOKEN=your_github_token
+```
 
+Notes:
 
-## Why ReleaseMind Stands Out
+- `GEMINI_API_KEY` / `VITE_GEMINI_API_KEY` enable model-backed analysis
+- without Gemini, the app uses fallback analysis
+- `GITHUB_TOKEN` is strongly recommended for GitHub API reliability
 
-ReleaseMind introduces a new paradigm:
+### 3. Run the app
 
-> CI/CD pipelines should not just execute
-> They should **reason before execution**
+```bash
+npm run dev
+```
 
-This bridges:
+The app runs through [server.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/server.ts:1), which starts the Express server and mounts Vite middleware in development.
 
-* AI Systems
-* DevOps Engineering
-* Reliability Engineering
-* Software Architecture Intelligence
+### 4. Type check
 
----
+```bash
+npm run lint
+```
 
+## Project Structure
 
+Important files:
 
+- [server.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/server.ts:1)
+  Express server, Socket.IO setup, GitHub context fetching
+- [src/services/geminiService.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/src/services/geminiService.ts:1)
+  AI and fallback release analysis
+- [src/services/githubService.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/src/services/githubService.ts:1)
+  Frontend client for GitHub context API calls
+- [src/components/Dashboard.tsx](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/src/components/Dashboard.tsx:1)
+  Main analysis UI and simulation flow
+- [src/lib/agents.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/src/lib/agents.ts:1)
+  Shared base-agent definitions
+- [src/firebase.ts](/Users/chandanls/Desktop/ReleaseMind/ReleaseMind/src/firebase.ts:1)
+  Firebase initialization
+
+## Known Constraints
+
+- Only public GitHub repo/PR analysis is supported right now
+- Large repositories are sampled and truncated for model size limits
+- Fallback analysis is heuristic and more conservative than Gemini output
+- Real GitHub private-repo support would require additional auth and permission design
+
+## Summary
+
+ReleaseMind is no longer just a static concept demo. It now performs real public GitHub context ingestion, displays core and custom agent findings, supports collaborative release analysis, and produces actionable release recommendations with a resilient fallback path when AI is unavailable.
