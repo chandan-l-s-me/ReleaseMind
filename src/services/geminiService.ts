@@ -129,9 +129,9 @@ export async function analyzeRelease(repoUrl: string, diff: string, customAgents
     
     Provide a unified, high-confidence analysis of the provided code changes.`;
 
-    const prompt = `Analyze the following release context:
+    const prompt = `Analyze the following repository and change context:
     Repository: ${repoUrl}
-    Code Changes/Diff: ${diff}
+    Repository Files / Change Context: ${diff}
     
     Identify:
     - The specific modules or services impacted.

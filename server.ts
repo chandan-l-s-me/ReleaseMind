@@ -14,6 +14,70 @@ type GitHubTarget =
   | { type: "repo"; owner: string; repo: string }
   | { type: "pull"; owner: string; repo: string; pullNumber: number };
 
+const REPO_FILE_CHAR_LIMIT = 180000;
+const MAX_SINGLE_FILE_SIZE = 100000;
+const TEXT_FILE_EXTENSIONS = new Set([
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".json",
+  ".md",
+  ".mdx",
+  ".py",
+  ".java",
+  ".go",
+  ".rb",
+  ".php",
+  ".html",
+  ".css",
+  ".scss",
+  ".sass",
+  ".less",
+  ".yml",
+  ".yaml",
+  ".toml",
+  ".txt",
+  ".sql",
+  ".sh",
+  ".c",
+  ".cc",
+  ".cpp",
+  ".h",
+  ".hpp",
+  ".rs",
+  ".kt",
+  ".swift",
+  ".xml"
+]);
+const PRIORITY_PATH_PREFIXES = [
+  "src/",
+  "app/",
+  "pages/",
+  "components/",
+  "lib/",
+  "services/",
+  "server/",
+  "api/",
+  "routes/",
+  "controllers/",
+  "config/",
+  "public/"
+];
+const IGNORED_PATH_SEGMENTS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "coverage",
+  ".next",
+  ".nuxt",
+  ".turbo",
+  "vendor"
+]);
+
 function parseGitHubUrl(rawUrl: string): GitHubTarget | null {
   try {
     const url = new URL(rawUrl);
@@ -93,12 +157,112 @@ function truncateText(value: string, maxLength: number) {
   return `${value.slice(0, maxLength)}\n...[truncated]`;
 }
 
+function isLikelyTextFile(filePath: string) {
+  const normalized = filePath.toLowerCase();
+  const fileName = normalized.split("/").pop() || normalized;
+
+  if ([...IGNORED_PATH_SEGMENTS].some((segment) => normalized.includes(`/${segment}/`) || normalized.startsWith(`${segment}/`))) {
+    return false;
+  }
+
+  if (
+    fileName === "dockerfile" ||
+    fileName === "makefile" ||
+    fileName === ".gitignore" ||
+    fileName === ".gitattributes" ||
+    fileName === ".env.example"
+  ) {
+    return true;
+  }
+
+  const extensionMatch = fileName.match(/(\.[^.]+)$/);
+  return extensionMatch ? TEXT_FILE_EXTENSIONS.has(extensionMatch[1]) : false;
+}
+
+function scoreFilePath(filePath: string) {
+  let score = 0;
+  const normalized = filePath.toLowerCase();
+  if (normalized.includes("readme")) score += 10;
+  if (normalized.includes("package.json")) score += 9;
+  if (normalized.includes("tsconfig")) score += 8;
+  if (normalized.includes("vite.config")) score += 8;
+  if (normalized.includes("server")) score += 6;
+  if (normalized.includes("config")) score += 5;
+
+  PRIORITY_PATH_PREFIXES.forEach((prefix, index) => {
+    if (normalized.startsWith(prefix)) {
+      score += PRIORITY_PATH_PREFIXES.length - index + 5;
+    }
+  });
+
+  return score;
+}
+
+async function fetchRepoTree(owner: string, repo: string, ref: string) {
+  const commitData = await fetchGitHubJson<any>(`https://api.github.com/repos/${owner}/${repo}/commits/${ref}`);
+  const treeSha = commitData.commit?.tree?.sha;
+  if (!treeSha) {
+    throw new Error("Unable to resolve repository tree from GitHub.");
+  }
+
+  const treeData = await fetchGitHubJson<any>(`https://api.github.com/repos/${owner}/${repo}/git/trees/${treeSha}?recursive=1`);
+  return Array.isArray(treeData.tree) ? treeData.tree : [];
+}
+
+async function buildRepoFileContext(owner: string, repo: string, ref: string) {
+  const tree = await fetchRepoTree(owner, repo, ref);
+  const candidateFiles = tree
+    .filter((item: any) => item.type === "blob" && typeof item.path === "string" && isLikelyTextFile(item.path))
+    .filter((item: any) => typeof item.size === "number" ? item.size <= MAX_SINGLE_FILE_SIZE : true)
+    .sort((a: any, b: any) => scoreFilePath(b.path) - scoreFilePath(a.path) || a.path.localeCompare(b.path));
+
+  let totalChars = 0;
+  let truncated = false;
+  const fileSections: string[] = [];
+  const includedFiles: string[] = [];
+
+  for (const file of candidateFiles) {
+    if (!file.sha || !file.path) {
+      continue;
+    }
+
+    const blob = await fetchGitHubJson<any>(`https://api.github.com/repos/${owner}/${repo}/git/blobs/${file.sha}`);
+    const encoding = blob.encoding === "base64" ? "base64" : undefined;
+    if (!encoding || typeof blob.content !== "string") {
+      continue;
+    }
+
+    const rawText = Buffer.from(blob.content, encoding).toString("utf8");
+    if (rawText.includes("\u0000")) {
+      continue;
+    }
+
+    const section = `File: ${file.path}\n${truncateText(rawText, 6000)}`;
+    if (totalChars + section.length > REPO_FILE_CHAR_LIMIT) {
+      truncated = true;
+      break;
+    }
+
+    fileSections.push(section);
+    includedFiles.push(file.path);
+    totalChars += section.length;
+  }
+
+  return {
+    fileContext: fileSections.join("\n\n---\n\n"),
+    includedFiles,
+    scannedTextFileCount: candidateFiles.length,
+    truncated
+  };
+}
+
 async function buildRepoContext(owner: string, repo: string) {
   const [repoData, commits, readme] = await Promise.all([
     fetchGitHubJson<any>(`https://api.github.com/repos/${owner}/${repo}`),
     fetchGitHubJson<any[]>(`https://api.github.com/repos/${owner}/${repo}/commits?per_page=5`),
     fetchGitHubText(`https://api.github.com/repos/${owner}/${repo}/readme`, "application/vnd.github.raw+json")
   ]);
+  const repoFiles = await buildRepoFileContext(owner, repo, repoData.default_branch);
 
   const commitSummary = commits
     .map((commit) => {
@@ -125,14 +289,22 @@ async function buildRepoContext(owner: string, repo: string) {
     commitSummary || "- No recent commits found.",
     "",
     "README Excerpt:",
-    truncateText(readme || "README not available.", 4000)
+    truncateText(readme || "README not available.", 4000),
+    "",
+    `Repository Files Read: ${repoFiles.includedFiles.length} of ${repoFiles.scannedTextFileCount}${repoFiles.truncated ? " (truncated for model size)" : ""}`,
+    "",
+    "Repository File Contents:",
+    repoFiles.fileContext || "No readable text files were fetched."
   ].join("\n");
 
   return {
     sourceType: "repo",
     resolvedRepoUrl: repoData.html_url,
     title: repoData.full_name,
-    contextText
+    contextText,
+    includedFiles: repoFiles.includedFiles,
+    scannedTextFileCount: repoFiles.scannedTextFileCount,
+    truncated: repoFiles.truncated
   };
 }
 
@@ -142,6 +314,7 @@ async function buildPullRequestContext(owner: string, repo: string, pullNumber: 
     fetchGitHubJson<any>(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}`),
     fetchGitHubJson<any[]>(`https://api.github.com/repos/${owner}/${repo}/pulls/${pullNumber}/files?per_page=100`)
   ]);
+  const repoFiles = await buildRepoFileContext(owner, repo, pullData.head?.sha || repoData.default_branch);
 
   const fileSummaries = files.map((file) => {
     const patch = typeof file.patch === "string" ? truncateText(file.patch, 1200) : "Patch not available.";
@@ -165,6 +338,11 @@ async function buildPullRequestContext(owner: string, repo: string, pullNumber: 
     "PR Description:",
     truncateText(pullData.body || "No PR description provided.", 2000),
     "",
+    `Repository Files Read: ${repoFiles.includedFiles.length} of ${repoFiles.scannedTextFileCount}${repoFiles.truncated ? " (truncated for model size)" : ""}`,
+    "",
+    "Repository File Contents:",
+    repoFiles.fileContext || "No readable text files were fetched.",
+    "",
     "Changed Files and Patch Excerpts:",
     truncateText(fileSummaries.join("\n\n---\n\n") || "No file changes available.", 12000)
   ].join("\n");
@@ -173,7 +351,10 @@ async function buildPullRequestContext(owner: string, repo: string, pullNumber: 
     sourceType: "pull_request",
     resolvedRepoUrl: pullData.html_url,
     title: `${repoData.full_name}#${pullNumber}`,
-    contextText
+    contextText,
+    includedFiles: repoFiles.includedFiles,
+    scannedTextFileCount: repoFiles.scannedTextFileCount,
+    truncated: repoFiles.truncated
   };
 }
 

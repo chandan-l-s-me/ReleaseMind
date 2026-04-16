@@ -3,6 +3,9 @@ export interface GitHubContextResponse {
   resolvedRepoUrl: string;
   title: string;
   contextText: string;
+  includedFiles: string[];
+  scannedTextFileCount: number;
+  truncated: boolean;
 }
 
 export async function fetchGitHubContext(url: string): Promise<GitHubContextResponse> {
