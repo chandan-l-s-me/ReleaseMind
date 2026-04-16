@@ -2,21 +2,17 @@ import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, 
-  Github, 
   Mail, 
-  ArrowRight, 
-  Loader2,
-  CheckCircle2
+  Loader2
 } from "lucide-react";
 import { cn } from "@/src/lib/utils";
 import { 
   signInWithPopup, 
-  UserCredential,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile
 } from "firebase/auth";
-import { auth, googleProvider, githubProvider } from "../firebase";
+import { auth, googleProvider } from "../firebase";
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -47,19 +43,6 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
     setError(null);
     try {
       await signInWithPopup(auth, googleProvider);
-      onClose();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGithubSignIn = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await signInWithPopup(auth, githubProvider);
       onClose();
     } catch (err: any) {
       setError(err.message);
@@ -144,15 +127,6 @@ export default function AuthModal({ isOpen, onClose }: AuthModalProps) {
                   >
                     <Mail className="w-4 h-4" />
                     Google
-                  </button>
-                  
-                  <button
-                    onClick={handleGithubSignIn}
-                    disabled={loading}
-                    className="w-full py-5 px-8 rounded-full glass border border-white/10 text-white text-[11px] uppercase tracking-[0.25em] font-bold flex items-center justify-center gap-4 hover:bg-white hover:text-black transition-all disabled:opacity-50"
-                  >
-                    <Github className="w-4 h-4" />
-                    GitHub
                   </button>
 
                   <button

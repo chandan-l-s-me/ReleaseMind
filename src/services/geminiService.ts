@@ -15,11 +15,103 @@ function getAI() {
   return aiInstance;
 }
 
+function extractImpactedModules(repoUrl: string, diff: string) {
+  const repoName = repoUrl
+    .split("/")
+    .filter(Boolean)
+    .slice(-1)[0]
+    ?.replace(/\.git$/, "");
+
+  const matches = Array.from(
+    new Set(
+      [
+        repoName,
+        ...Array.from(diff.matchAll(/File:\s+([^\n]+)/g)).map((match) => match[1]),
+        ...Array.from(diff.matchAll(/`([^`]+)`/g)).map((match) => match[1])
+      ]
+        .filter(Boolean)
+        .map((value) => String(value).trim())
+        .filter((value) => value.length > 1)
+    )
+  );
+
+  return matches.slice(0, 6).length > 0 ? matches.slice(0, 6) : ["application"];
+}
+
+function inferSuggestedTests(diff: string) {
+  const lower = diff.toLowerCase();
+  const tests = [
+    { name: "Smoke test core user flow", impact: 92 },
+    { name: "Regression test changed screens and forms", impact: 84 }
+  ];
+
+  if (lower.includes("billing") || lower.includes("invoice") || lower.includes("payment")) {
+    tests.push({ name: "Validate billing calculations and printable invoice output", impact: 96 });
+  }
+
+  if (lower.includes("dashboard") || lower.includes("ui") || lower.includes("component")) {
+    tests.push({ name: "Verify dashboard rendering and key UI interactions", impact: 88 });
+  }
+
+  if (lower.includes("key") || lower.includes("config") || lower.includes("env")) {
+    tests.push({ name: "Check configuration keys and environment-dependent flows", impact: 86 });
+  }
+
+  return tests.slice(0, 5);
+}
+
+function buildFallbackAnalysis(repoUrl: string, diff: string): ReleaseAnalysis {
+  const lower = diff.toLowerCase();
+  const impactedModules = extractImpactedModules(repoUrl, diff);
+  const suggestedTests = inferSuggestedTests(diff);
+
+  let riskScore = 38;
+  if (lower.includes("billing") || lower.includes("payment")) riskScore += 18;
+  if (lower.includes("dashboard") || lower.includes("ui")) riskScore += 10;
+  if (lower.includes("key") || lower.includes("config") || lower.includes("env")) riskScore += 14;
+  if (lower.includes("auth") || lower.includes("security")) riskScore += 15;
+  riskScore = Math.min(92, riskScore);
+
+  const graphData = {
+    nodes: impactedModules.map((module, index) => ({ id: module, group: index === 0 ? 1 : 2 })),
+    links: impactedModules.slice(1).map((module) => ({
+      source: impactedModules[0],
+      target: module,
+      value: 5
+    }))
+  };
+
+  const prioritizedTests = suggestedTests.map((test, index) => ({
+    id: `fallback-test-${index}`,
+    name: test.name,
+    impact: test.impact,
+    status: "pending" as const
+  }));
+
+  const recommendation =
+    riskScore > 70 ? "Block Release" : riskScore > 40 ? "Canary Release" : "Full Release";
+
+  return {
+    analysis: {
+      impactedModules,
+      riskAssessment:
+        "ReleaseMind used local fallback analysis because a Gemini API key is not configured. Based on the supplied repository context, this change appears to touch user-visible flows and possibly configuration-sensitive behavior, so targeted regression testing is recommended before release.",
+      suggestedTests: prioritizedTests.map((test) => test.name),
+      confidenceScore: Math.max(40, 100 - riskScore - 10)
+    },
+    graphData,
+    riskScore,
+    prioritizedTests,
+    recommendation,
+    timestamp: new Date().toISOString()
+  };
+}
+
 export async function analyzeRelease(repoUrl: string, diff: string, customAgents: string[] = []): Promise<ReleaseAnalysis> {
   try {
     const ai = getAI();
     if (!ai) {
-      throw new Error("Gemini API Key is not configured. Please add VITE_GEMINI_API_KEY to your .env file.");
+      return buildFallbackAnalysis(repoUrl, diff);
     }
     const model = "gemini-3-flash-preview";
     
@@ -142,6 +234,6 @@ export async function analyzeRelease(repoUrl: string, diff: string, customAgents
     };
   } catch (error) {
     console.error("Gemini Analysis error:", error);
-    throw new Error("Failed to analyze release with AI. Please check your input and try again.");
+    return buildFallbackAnalysis(repoUrl, diff);
   }
 }

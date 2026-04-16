@@ -29,6 +29,7 @@ import { ReleaseAnalysis, TestItem, UserConfig } from "@/src/types";
 import GraphView from "./GraphView";
 import { cn } from "@/src/lib/utils";
 import { analyzeRelease } from "@/src/services/geminiService";
+import { fetchGitHubContext } from "@/src/services/githubService";
 import { useAuthState } from "react-firebase-hooks/auth";
 import { auth } from "../firebase";
 import AuthModal from "./AuthModal";
@@ -54,6 +55,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ReleaseAnalysis | null>(null);
   const [simulatedRisk, setSimulatedRisk] = useState<number | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [sourceSummary, setSourceSummary] = useState<string | null>(null);
   const [user, authLoading] = useAuthState(auth);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
@@ -149,16 +152,34 @@ export default function Dashboard() {
   const handleAnalyze = async () => {
     if (!repoUrl && !diff) return;
     setLoading(true);
+    setAnalysisError(null);
+    setSourceSummary(null);
     try {
-      const data = await analyzeRelease(repoUrl, diff, customAgents);
+      let resolvedRepoUrl = repoUrl.trim();
+      let analysisInput = diff.trim();
+
+      if (resolvedRepoUrl && resolvedRepoUrl.includes("github.com")) {
+        const githubContext = await fetchGitHubContext(resolvedRepoUrl);
+        resolvedRepoUrl = githubContext.resolvedRepoUrl;
+        analysisInput = analysisInput
+          ? `${githubContext.contextText}\n\nUser Notes / Extra Context:\n${analysisInput}`
+          : githubContext.contextText;
+        setSourceSummary(
+          githubContext.sourceType === "pull_request"
+            ? `Fetched live GitHub PR context from ${githubContext.title}.`
+            : `Fetched live GitHub repository context from ${githubContext.title}.`
+        );
+      }
+
+      const data = await analyzeRelease(resolvedRepoUrl, analysisInput, customAgents);
       setResult(data);
       setSimulatedRisk(data.riskScore);
 
       broadcastState({
         result: data,
         simulatedRisk: data.riskScore,
-        repoUrl,
-        diff
+        repoUrl: resolvedRepoUrl,
+        diff: analysisInput
       });
 
       // Save to history if user is logged in
@@ -166,8 +187,8 @@ export default function Dashboard() {
         try {
           await addDoc(collection(db, "analyses"), {
             userId: user.uid,
-            repoUrl,
-            diff: diff.substring(0, 5000), // Limit size for Firestore
+            repoUrl: resolvedRepoUrl,
+            diff: analysisInput.substring(0, 5000), // Limit size for Firestore
             result: data,
             timestamp: new Date().toISOString(),
             riskScore: data.riskScore
@@ -178,6 +199,7 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error("Analysis failed:", error);
+      setAnalysisError(error instanceof Error ? error.message : "Analysis failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -446,14 +468,14 @@ ${result.prioritizedTests.map(t => `- [ ] **${t.name}** (Impact: ${t.impact}%)`)
                   
                   <div className="space-y-8">
                     <div>
-                      <label className="block text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mb-4">Repository URL</label>
+                      <label className="block text-[10px] font-bold text-white/30 uppercase tracking-[0.2em] mb-4">Repository Or PR URL</label>
                       <div className="relative">
                         <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-white/20 w-4 h-4" />
                         <input 
                           type="text" 
                           value={repoUrl}
                           onChange={(e) => setRepoUrl(e.target.value)}
-                          placeholder="https://github.com/org/repo"
+                          placeholder="https://github.com/org/repo or /pull/123"
                           className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 pl-12 pr-4 text-white text-sm focus:outline-none focus:border-accent/50 transition-colors font-light"
                         />
                       </div>
@@ -468,6 +490,18 @@ ${result.prioritizedTests.map(t => `- [ ] **${t.name}** (Impact: ${t.impact}%)`)
                           className="w-full bg-white/5 border border-white/10 rounded-2xl py-4 px-4 text-white text-sm h-48 focus:outline-none focus:border-accent/50 transition-colors resize-none font-light"
                         />
                     </div>
+
+                    {sourceSummary && (
+                      <div className="rounded-2xl border border-accent/20 bg-accent/10 px-4 py-3 text-xs text-accent leading-relaxed">
+                        {sourceSummary}
+                      </div>
+                    )}
+
+                    {analysisError && (
+                      <div className="rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-xs text-red-300 leading-relaxed">
+                        {analysisError}
+                      </div>
+                    )}
 
                     <motion.button
                       whileHover={{ scale: 1.02 }}
